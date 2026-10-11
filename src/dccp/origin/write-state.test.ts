@@ -1,0 +1,37 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { auditWrite, mainnetWriter, resetMainnet, resetState, testnetWriter, twoP5L, undoMainnet, undoState, writeMainnet, writeTestnet } from './write-state.ts'
+
+test('the testnet writer appends and does not write mainnet', () => {
+  resetState()
+  const first = writeTestnet('layout')
+  const again = writeTestnet('layout')
+  assert.equal(first.schema, 'dualis.writer.v1.testnet')
+  assert.equal(first.mainnet, false)
+  assert.equal(first.added, true)
+  assert.equal(again.added, false)
+  assert.equal(again.n, 1)
+  assert.equal(undoState().undone, false)
+  assert.equal(testnetWriter().reverses, false)
+  assert.equal(testnetWriter().n, 1)
+  resetMainnet()
+  const live = writeMainnet('layout')
+  assert.equal(live.schema, 'dualis.writer.v1')
+  assert.equal(live.mainnet, true)
+  assert.equal(live.till, 'closed')
+  assert.equal(mainnetWriter().signed, false)
+  assert.equal(writeMainnet('layout').added, false)
+  assert.equal(undoMainnet().undone, false)
+  assert.equal(undoMainnet().n, 1)
+  const before = undoMainnet().hash
+  assert.equal(writeMainnet('second').hash === before, false)
+  assert.equal(undoMainnet().hash === before, false)
+  assert.notEqual(before, '0'.repeat(64))
+  assert.equal(testnetWriter().n, 1)
+  const missed = auditWrite('0'.repeat(64), 'layout', 'ff')
+  assert.equal(missed.holds, 'nothing')
+  assert.equal(missed.ok, false)
+  assert.equal(mainnetWriter().n, 2)
+  assert.deepEqual(twoP5L().layers, ['NO_FORCE', 'HOST_SAFE', 'CLEANUP_FIRST', 'TRUTH_OR_NOTHING', 'nothing'])
+  assert.equal(twoP5L().pipes, 2)
+})

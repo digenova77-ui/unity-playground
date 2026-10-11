@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { blockWords, nextBlock, spendBlock } from './blocks.ts'
+
+test('the next letter or number is the next block and a child is not recorded', () => {
+  const a = nextBlock('letter', 0)
+  const c = nextBlock('letter', 2)
+  const three = nextBlock('number', 2)
+  assert.equal('next' in a && a.next, 'A')
+  assert.equal('cost' in a && a.cost, 1)
+  assert.equal('next' in c && c.next, 'C')
+  assert.equal('cost' in c && c.cost, 3)
+  assert.equal('next' in three && three.next, '3')
+  assert.equal('worth' in three && three.worth, null)
+  assert.equal('refused' in nextBlock('letter', -1), true)
+  assert.equal('refused' in nextBlock('letter', 26), true)
+  assert.match(blockWords(), /A B C and one two three/)
+  assert.match(blockWords(), /A child is not recorded/)
+  assert.match(blockWords(), /pays nothing there/)
+  const quiet = spendBlock({ choice: false, where: 'plant', known: 0, idea: 'starts from A', botSigned: true })
+  assert.equal(quiet.spent, false)
+  const old = spendBlock({ choice: true, where: 'old-world', known: 0, idea: 'starts from A', botSigned: true })
+  assert.equal(old.spent, false)
+  assert.equal(old.dollars, null)
+  const unsigned = spendBlock({ choice: true, where: 'plant', known: 0, idea: 'starts from A', botSigned: false })
+  assert.equal(unsigned.spent, false)
+  const loose = spendBlock({ choice: true, where: 'plant', known: 0, idea: 'starts from nothing', botSigned: true })
+  assert.equal(loose.spent, false)
+  const planted = spendBlock({ choice: true, where: 'plant', known: 0, idea: 'starts from A', botSigned: true })
+  assert.equal(planted.spent, true)
+  if (planted.spent) assert.equal(planted.cost, 1)
+})

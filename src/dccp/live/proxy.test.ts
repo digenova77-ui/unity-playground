@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import { feedUrl, weatherFromMet } from './proxy.ts'
+
+test('only named feeds are fetched, and wind is converted', () => {
+  assert.equal(feedUrl('iss', 0, 0)?.url.includes('25544'), true)
+  assert.equal(feedUrl('river', 0, 0), null)
+  assert.equal(feedUrl('https://example.com', 0, 0), null)
+  assert.equal(feedUrl('wb', 0, 0, 'EG.ELC.ACCS.ZS')?.url.includes('EG.ELC.ACCS.ZS'), true)
+  assert.equal(feedUrl('wb', 0, 0, 'https://example.com'), null)
+  assert.equal(feedUrl('generation', 0, 0)?.url.includes('generation'), true)
+  assert.equal(feedUrl('cad', 0, 0)?.url, 'https://ssd-api.jpl.nasa.gov/cad.api?dist-max=0.05&date-min=now&sort=dist&limit=8')
+  assert.equal(feedUrl('wb-series', 0, 0, 'SP.POP.TOTL')?.url.includes('SP.POP.TOTL'), true)
+  assert.equal(feedUrl('wb-series', 0, 0, 'https://example.com'), null)
+  assert.equal(feedUrl('wb-lang', 0, 0, 'CAN')?.url.includes('P298'), true)
+  assert.equal(feedUrl('wb-lang', 0, 0, 'CA'), null)
+  assert.equal(feedUrl('depart', 0, 0, 'ca-on-Belleville-Transit_COL648')?.url.includes('stoptimes'), true)
+  assert.equal(feedUrl('depart', 0, 0, 'https://evil'), null)
+  assert.equal(feedUrl('club', 0, 0, 'Belleville')?.url.includes('Belleville'), true)
+  assert.equal(feedUrl('club', 0, 0, 'https://evil.example'), null)
+  assert.equal(feedUrl('fixtures', 0, 0, '139128')?.url.includes('139128'), true)
+  assert.equal(feedUrl('stops', 44.16, -77.38)?.url.includes('map/stops'), true)
+  assert.equal(feedUrl('stops', 999, 0), null)
+  assert.equal(feedUrl('activity', 44.16, -77.38)?.url.includes('Q34227'), true)
+  assert.equal(feedUrl('activity', 43.65, -79.38), null)
+  assert.equal(feedUrl('posted', 0, 0, 'intelligencer')?.url, 'https://www.intelligencer.ca/')
+  assert.equal(feedUrl('posted', 0, 0, 'https://evil.example'), null)
+  const weather = weatherFromMet({ properties: { timeseries: [{ time: '2026-10-03T19:00:00Z', data: { instant: { details: { air_temperature: 12, wind_speed: 5 } } } }] } })
+  assert.equal(weather?.current.temperature_2m, 12)
+  assert.equal(weather?.current.wind_speed_10m, 18)
+  assert.equal(weatherFromMet({}), null)
+})

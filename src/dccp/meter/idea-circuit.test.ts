@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { ideaCircuit, ideaCircuitWords, nextFrom } from './idea-circuit.ts'
+
+test('the price sits on the result and the circuit stays open without one', () => {
+  const open = ideaCircuit('the manifesto solution', '')
+  assert.equal(open.closed, false)
+  assert.equal(open.price, null)
+  assert.equal(open.dollars, null)
+  assert.equal(open.efuseMoves, false)
+  const one = ideaCircuit('the manifesto solution', 'logic')
+  assert.equal(one.closed, true)
+  assert.equal(one.price, 1)
+  assert.equal(one.next, 1)
+  assert.equal(one.keptGoing, false)
+  const all = ideaCircuit('the manifesto solution', 'logic+truth+pragmatism')
+  assert.equal(all.price, 9)
+  assert.equal(all.next, 1)
+  const unseeded = ideaCircuit(' ', 'logic')
+  assert.equal(unseeded.closed, false)
+  const unknown = ideaCircuit('the manifesto solution', 'a market price')
+  assert.equal(unknown.closed, false)
+  assert.equal(open.next, null)
+  assert.match(ideaCircuitWords('the manifesto solution', 'logic'), /built on this result/)
+  assert.equal(nextFrom('the manifesto solution', 'logic', 'the manifesto solution').rooted, false)
+  assert.equal(nextFrom('the manifesto solution', 'logic', 'a second thought').rooted, false)
+  const again = nextFrom('the manifesto solution', 'logic', 'a second thought built on logic')
+  assert.equal(again.rooted, true)
+  assert.equal(again.unit, 1)
+  assert.equal(again.price, 1)
+  assert.equal(again.builtOn, 'logic')
+})

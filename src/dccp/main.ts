@@ -1,0 +1,1403 @@
+import * as THREE from 'three'
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import './styles/main.css'
+import { Renderer, suggestQuality } from './engine/renderer'
+import { Flight } from './engine/flight'
+import { Haptics, type HapticKind } from './engine/haptics'
+import { Ambient } from './engine/ambient'
+import { loadFont } from './world/text3d'
+import { World } from './world/world'
+import { loadRegistry } from './data/registry'
+import type { ModuleIntegrity, Registry } from './data/types'
+import { LiveFeeds, type FeedValues } from './live/feeds'
+import { IrisBrain, OUTSIDE_GAP, type IrisReply, type Target } from './iris/brain'
+import { discoveryWords, mirrorOf } from './iris/mirror'
+import { offerMesh } from './unity/mesh'
+import { memorySpeech, recall, remember } from './iris/memory'
+import { IRIS_TASK, taskHeld } from './iris/task'
+import { IrisVoice, recognitionSupported, synthesisSupported } from './iris/voice'
+import { openSenses, sensesWanted } from './iris/senses'
+import { IrisOrb } from './iris/orb'
+import { Overlay, type EntryMode, type Toggles } from './ui/overlay'
+import { Card, Ladder, type CardModel } from './ui/card'
+import { cardFor, cityCard, countryCard, type CardCtx } from './ui/cards'
+import { TIERS, inCountry, toLatLon, tierInfo, type Tier } from './world/geo'
+import type { City, Country } from './data/types'
+import { abstractLine } from './unity/abstract'
+import { bindOrigin } from './unity/fuse'
+import { filmNote, mountFilm, unmountFilm } from './gate/film'
+import { mountWelcome, WELCOME_SPEECH, type WelcomePlay } from './gate/welcome'
+import { createPilotHandle, FAILURE_SPEECH, forgetHandle, storedHandle, WALLET_DOOR } from './unity/unityid'
+import { AGREEMENT_ID, agreementAccepted, clearAgreement } from './unity/agreement'
+import { ignitionSeries, markStory, storyMarked } from './unity/series'
+import { SHOW, yes } from './unity/omni'
+import { COSMOGENESIS_SEED, ReceiptPipe, type PipeView } from './pipe/chain'
+import { citeSpeech, placeLines, wikiNote } from './live/wiki'
+import { DecisionLedger } from './meter/decision'
+import { admitSeat as admitSpend } from './meter/matrix'
+import { economicsCard, walletBound } from './meter/plain'
+import { moveCoin } from './meter/coins'
+import { unityOpen, unitySend, unityWithdraw, type UnityView } from './meter/unityclient'
+import { giveKey, mintKey, payTrickle, type SolvedKey } from './meter/keys'
+import { nullifyBotValue, priorFrom } from './meter/value'
+import { connectorLines, cosmicLines, connectors } from './unity/connectors'
+import { rotate, rotationWords } from './trinity/rotation'
+import { foundAgain } from './meter/again'
+import { bookDerivative, seedReturn, type Derivative } from './meter/seed'
+import { sap, sapWords } from './meter/sap'
+import { crossGap, emptyGap, hireBot, sellBody, type GapState } from './meter/gap'
+import { swarmSpeech, swarmView } from './meter/swarm'
+import { auditBot, botAudit, botSeat, botsMay, releaseBot, signBotUnity } from './unity/botid'
+import { foundingBoard } from './unity/founding'
+import { hostWords, invokeHost } from './unity/hostid'
+import { darkHolds, findWhite, fingerprint, listDark, listWhite, takeDark, takeWhite } from './ledger/dark'
+import { admitSeat, loadSeats, rosterLines, saveSeats } from './ledger/juvenile'
+import { auditTotality } from './ledger/totality'
+import { listProofs } from './ledger/blackhole'
+import { choosePipe, keepAdventure, roomsOf, seeAdventure } from './unity/adventure'
+import { scaleBand } from './ui/band'
+import { lean, lookShift, paintDepth } from './ui/depth'
+import { unifiedTelemetry, type Reading } from './ui/telemetry'
+import { hangLine } from './index/site'
+import { iceLook } from './rte/ice'
+import { sceneFrom } from './rte/construct'
+import { noteFatherSign, purityChallenge, signState, verifyPublicSignature } from './unity/fatherkey'
+import { elevationWords, lastPulse, purityToSign, runPulse, signable, startPurity, type PillarState, type SignMark } from './law/purity'
+
+const PREFS = 'dccpworld.prefs.v2' // v2: sound now means optional ambient music, off by default
+const DISC = 'dccpworld.discovered.v1'
+const FEED_KEYS = ['weather', 'river', 'quakes', 'iss', 'kp', 'carbon'] as const
+const prefersReduced = matchMedia('(prefers-reduced-motion: reduce)').matches
+const defaults = (): Toggles => ({ sound: false, haptics: false, reducedMotion: prefersReduced, transcript: false })
+const loadPrefs = (): Toggles => {
+  try { return { ...defaults(), ...JSON.parse(localStorage.getItem(PREFS) ?? '{}') } } catch { return defaults() }
+}
+const hadPrefs = (): boolean => { try { return localStorage.getItem(PREFS) !== null } catch { return false } }
+const savePrefs = (t: Toggles): void => { try { localStorage.setItem(PREFS, JSON.stringify(t)) } catch { /* private mode */ } }
+
+const toggles = loadPrefs()
+if (prefersReduced) toggles.reducedMotion = true
+const canvas = document.getElementById('game') as HTMLCanvasElement
+canvas.tabIndex = 0
+const filmRoot = document.getElementById('film')
+if (filmRoot && !storedHandle()) mountFilm(filmRoot, () => { void grantAgreement() }, prefersReduced)
+const overlay = new Overlay(document.getElementById('ui')!, toggles, recognitionSupported())
+const card = new Card(document.getElementById('ui')!)
+const ladder = new Ladder(document.getElementById('ui')!, TIERS)
+card.setReducedMotion(toggles.reducedMotion)
+let shown: Target | null = null
+
+type Q = 'low' | 'medium' | 'high'
+function chooseQuality(): Q {
+  const forced = new URLSearchParams(location.search).get('quality')
+  if (forced === 'low' || forced === 'medium' || forced === 'high') return forced
+  let q: Q = suggestQuality()
+  try {
+    // Software rasterisers (SwiftShader, llvmpipe) and small GPUs cannot hold 4K textures + bloom; never let them crash the tab.
+    const probe = document.createElement('canvas').getContext('webgl2') ?? document.createElement('canvas').getContext('webgl')
+    if (!probe) return 'low'
+    const info = probe.getExtension('WEBGL_debug_renderer_info')
+    const name = String(info ? probe.getParameter(info.UNMASKED_RENDERER_WEBGL) : probe.getParameter(probe.RENDERER)).toLowerCase()
+    if (/swiftshader|llvmpipe|software|basic render/.test(name)) q = 'low'
+    if (probe.getParameter(probe.MAX_TEXTURE_SIZE) < 8192 && q === 'high') q = 'medium'
+    probe.getExtension('WEBGL_lose_context')?.loseContext()
+  } catch { q = 'low' }
+  const mem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory
+  if (mem !== undefined && mem <= 2) q = 'low'
+  return q
+}
+const quality = chooseQuality()
+const renderer = new Renderer(canvas, quality)
+canvas.addEventListener('webglcontextlost', e => {
+  e.preventDefault()
+  overlay.fail('The graphics context was lost. Reload to continue; add ?quality=low to the address for a lighter world.')
+})
+const scene = new THREE.Scene()
+scene.background = new THREE.Color(0x03050b)
+const camera = new THREE.PerspectiveCamera(46, window.innerWidth / window.innerHeight, 0.05, 2000)
+camera.position.set(18, 14, 32)
+const controls = new OrbitControls(camera, canvas)
+controls.enableDamping = true
+controls.dampingFactor = 0.08
+controls.minDistance = 4
+controls.maxDistance = 140
+controls.rotateSpeed = 0.6
+controls.target.set(0, 0, 0)
+const prelude = new THREE.Group()
+prelude.add(new THREE.AmbientLight(0x8aa4c8, 0.85))
+const preludeSun = new THREE.DirectionalLight(0xfff4e0, 1.7)
+preludeSun.position.set(30, 12, 18)
+prelude.add(preludeSun)
+const preludeEarth = new THREE.Mesh(
+  new THREE.SphereGeometry(10, 64, 32),
+  new THREE.MeshStandardMaterial({ color: 0x16324f, roughness: 0.72, metalness: 0.04 }),
+)
+prelude.add(preludeEarth)
+scene.add(prelude)
+const flight = new Flight(camera, controls.target)
+const haptics = new Haptics()
+haptics.enabled = false
+let audio: AudioContext | null = null
+let ambient: Ambient | null = null
+let voice: IrisVoice | null = null
+let mode: EntryMode | null = null
+let world: World | null = null
+let unitySeat: THREE.Object3D | null = null
+let welcome: WelcomePlay | null = null
+let welcomeQueued = false
+let loadedFont: Awaited<ReturnType<typeof loadFont>> | null = null
+let registry: Registry
+let integrity: ModuleIntegrity[] = []
+let brain: IrisBrain
+const feeds = new LiveFeeds()
+const pipe = new ReceiptPipe()
+let pipeView: PipeView = pipe.view()
+async function syncPipe(): Promise<void> {
+  const seat = pipe.seat(storedHandle()?.handle ?? null)
+  if (seat === 'member') await pipe.ensureLaw()
+  pipeView = pipe.view()
+  if (shown?.kind === 'pipe') refreshCard()
+}
+const orb = new IrisOrb(1.6, quality === 'low' ? 4 : 5)
+orb.group.position.set(-9, 3.5, 17)
+scene.add(orb.group)
+const discovered = new Set<string>((() => { try { return JSON.parse(localStorage.getItem(DISC) ?? '[]') as string[] } catch { return [] } })())
+let irisAwake = false
+let pendingHeard = ''
+let order: Target[] = []
+let cursor = -1
+const emptySpectrum = new Uint8Array(64)
+
+function pulse(kind: HapticKind): void {
+  if (toggles.haptics && !toggles.reducedMotion) haptics.pulse(kind)
+}
+
+async function boot(): Promise<void> {
+  const tl = new THREE.TextureLoader()
+  const size = quality === 'high' ? 4096 : 2048
+  const loadTex = (name: string) => tl.loadAsync(`/textures/earth-${name}-${size}.jpg`).then(t => {
+    t.colorSpace = THREE.SRGBColorSpace
+    t.anisotropy = renderer.gl.capabilities.getMaxAnisotropy()
+    return t
+  })
+  let timer: number | undefined
+  const timeout = new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error('Loading took longer than 40 seconds. Check your connection and reload.')), 40_000) as unknown as number })
+  const [font, reg, day, night] = await Promise.race([Promise.all([loadFont(), loadRegistry('/'), loadTex('day'), loadTex('night')]), timeout])
+  clearTimeout(timer)
+  loadedFont = font
+  registry = reg.registry
+  integrity = reg.integrity
+  const w = new World(font, registry, integrity, { day, night }, quality)
+  world = w
+  scene.add(w.root)
+  scene.remove(prelude)
+  preludeEarth.geometry.dispose()
+  ;(preludeEarth.material as THREE.Material).dispose()
+  w.setDiscovered(discovered)
+  const open = w.geo.focusFor(20, -30, tierInfo('orbit').altitude)
+  camera.position.copy(open.camera)
+  controls.target.copy(open.anchor)
+  const outward = camera.position.clone().normalize()
+  const seat = new THREE.Group()
+  const ringMat = new THREE.MeshStandardMaterial({ color: 0xffd166, emissive: 0x14b8a6, emissiveIntensity: 0.45, metalness: 0.7, roughness: 0.22 })
+  const one = new THREE.Mesh(new THREE.TorusGeometry(1.7, 0.055, 16, 80), ringMat)
+  one.rotation.x = Math.PI / 2
+  seat.add(one)
+  for (let i = 0; i < 2; i++) {
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(1.7, 0.055, 16, 80), ringMat)
+    ring.rotation.x = Math.PI / 2 * 0.15
+    ring.rotation.y = (i + 1) * (Math.PI / 3)
+    seat.add(ring)
+  }
+  seat.position.copy(outward.clone().multiplyScalar(18))
+  scene.add(seat)
+  unitySeat = seat
+  void fetch('/api/fuse')
+    .then(res => (res.ok ? res.json() : null))
+    .then((body: { mark?: string } | null) => {
+      if (!bindOrigin(body?.mark ?? null).linked || !unitySeat) return
+      unitySeat.traverse(obj => {
+        const mat = (obj as THREE.Mesh).material
+        if (mat && !Array.isArray(mat) && 'emissiveIntensity' in mat) (mat as THREE.MeshStandardMaterial).emissiveIntensity = 0.9
+      })
+    })
+    .catch(() => { /* the origin did not answer, so the bind does not hold */ })
+  markStory()
+  if (welcomeQueued) beginWelcome()
+  brain = new IrisBrain(registry, () => ({ values: feeds.values, status: [...feeds.status.values()] }), () => ({
+    locked: integrity.filter(m => m.state === 'MATCH').length,
+    total: integrity.length,
+    mismatched: integrity.filter(m => m.state === 'MISMATCH' || m.state === 'NOT-LOCKED').map(m => m.module),
+  }), () => storedHandle()?.handle ?? null)
+  order = [
+    { kind: 'iris', key: 'iris' },
+    ...registry.chambers.map(c => ({ kind: 'chamber' as const, key: c.key })),
+    { kind: 'universal', key: 'universal' },
+    ...registry.rtes.map(r => ({ kind: 'rte' as const, key: r.key })),
+    ...['water', 'energy', 'climate', 'food', 'pandemic', 'pharmacology'].map(k => ({ kind: 'sector' as const, key: k })),
+    ...registry.jurisdictions.map(j => ({ kind: 'jurisdiction' as const, key: j.name })),
+    ...registry.canada.map(c => ({ kind: 'canada' as const, key: c.key })),
+    { kind: 'dclm', key: 'dclm' },
+    ...['404.html', 'alacarte.html', 'index.html', 'manifold.html', 'rtesimadclm/manifold.html'].map(k => ({ kind: 'pipe' as const, key: k })),
+    ...FEED_KEYS.map(k => ({ kind: 'feed' as const, key: k })),
+  ]
+  const label = (t: Target): string => (t.kind === 'iris' ? 'Agent Iris, the orb' : w.findPickable(t)?.label ?? t.key)
+  const group: Record<string, string> = { iris: 'Iris', chamber: 'Unity playground chambers', universal: 'Universal RTE', rte: 'RTE rooms', sector: 'Sector layers', jurisdiction: 'Jurisdictions', canada: 'Pan-Canadian scopes', dclm: 'DCLM and DCCP', pipe: 'DCLM and DCCP', feed: 'Live public feeds' }
+  overlay.setAtlas(order.map((t, i) => ({ id: String(i), group: group[t.kind] ?? 'Other', label: label(t) })))
+  refreshUnityId()
+  for (const k of FEED_KEYS) w.renderInstrument(k, feeds.status.get(k), feeds.values, Date.now())
+  overlay.setSceneText(w.sceneText())
+  startPurity({ hidden: () => document.hidden, read: pagePurity, onPulse: () => paintPurity() })
+  overlay.ready()
+  if (agreementAccepted() && sensesWanted()) void openSenses(true)
+}
+
+function onFeed(key: keyof FeedValues): void {
+  if (!world) return
+  world.renderInstrument(key, feeds.status.get(key), feeds.values, Date.now())
+  overlay.setSceneText(world.sceneText())
+  if (key === 'quakes' && feeds.values.quakes) world.setQuakes(feeds.values.quakes.items)
+  if (shown && (shown.kind === 'feed' || shown.kind === 'country' || shown.kind === 'city')) refreshCard()
+  if (key === 'iss' && feeds.values.iss && Number.isFinite(feeds.values.iss.lat)) world.setIss(feeds.values.iss.lat, feeds.values.iss.lon, feeds.values.iss.altKm)
+  paintScale()
+}
+
+const wikiAllowed = (): boolean => agreementAccepted()
+let wikiPending: string | null = null
+
+function grantAgreement(): void {
+  yes()
+  const pending = wikiPending
+  wikiPending = null
+  const after = (): void => {
+    paintPurity()
+    landOnPhone()
+    if (!pending) return
+    void settle(pending, { speech: OUTSIDE_GAP, action: 'none' }).then(reply => irisSays(reply))
+  }
+  if (!storedHandle()) void makeUnityId().then(after)
+  else {
+    void irisSays({ speech: SHOW, action: 'none' })
+    after()
+  }
+}
+
+function landOnPhone(): void {
+  if (!world) return
+  if (!agreementAccepted()) {
+    overlay.announce('Location is in the Unity agreement. One yes covers it, with the handle and Wikipedia.')
+    return
+  }
+  if (!navigator.geolocation) {
+    overlay.announce('This browser has no location service. You stay where you are.')
+    return
+  }
+  overlay.announce('Asking this phone where it is. The reading is not stored and not sent.')
+  navigator.geolocation.getCurrentPosition(pos => {
+    if (!world) return
+    const here = world.geo.focusFor(pos.coords.latitude, pos.coords.longitude, tierInfo('street').altitude)
+    camera.position.copy(here.camera)
+    controls.target.copy(here.anchor)
+    world.geo.pin(pos.coords.latitude, pos.coords.longitude)
+    const meters = pos.coords.accuracy
+    const how = meters >= 1000 ? `about ${Math.max(1, Math.round(meters / 1000))} kilometers` : `about ${Math.round(meters)} meters`
+    overlay.announce(meters > 50
+      ? `Human scale, on this phone's reading. The fix is only ${how}, so this is not a rooftop.`
+      : `Human scale, on this phone. The fix is ${how}.`)
+  }, () => overlay.announce('The phone did not share a location. You stay where you are.'), { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 })
+}
+
+function refreshLedger(): void {
+  const lines = [
+    ...listWhite().map(doc => `White · ${doc.sha256.slice(0, 12)} · ${doc.text.slice(0, 80)}`),
+    ...listDark().map(doc => `Dark · sealed · ${doc.sha256.slice(0, 12)} · ${doc.bytes} characters`),
+  ]
+  overlay.setLedger(lines)
+  const roster = rosterLines(storedHandle()?.handle ?? null, loadSeats())
+  overlay.setRoster(roster.dark, roster.lines)
+  const owner = storedHandle()?.handle ?? null
+  const rooms = roomsOf(owner)
+  overlay.setAdventure(rooms.length ? rooms.map(room => seeAdventure(room, owner).lines[0]) : ['No room yet. A room opens by a key. There is no password.'])
+  overlay.setConnectors(connectorLines({ countries: world?.geo.countries.length ?? 0, cities: world?.geo.cities.length ?? 0 }))
+  overlay.setUnified(rotationWords(rotate()))
+  void fingerprint(JSON.stringify({ shifts: economy.shifts, doctor: economy.doctor.supply, bots: economy.bots.supply })).then(walletHash => auditTotality([
+    ...listDark().map(doc => ({ kind: 'dark', sha256: doc.sha256 })),
+    ...loadSeats().map(seat => ({ kind: 'seat', sha256: seat.sha256 })),
+    ...listProofs().map(proof => ({ kind: 'proof', sha256: proof.sha256 })),
+    { kind: 'wallet', sha256: walletHash },
+  ])).then(row => overlay.setTotality(`Totality audited on the dark ledger. ${row.count} parts. Hash ${row.hash}. The scoreboard is hidden.`))
+}
+
+async function answerLedger(text: string): Promise<void> {
+  const q = text.replace(/\b(the|ledger|dark|white|document|documents)\b/gi, ' ').replace(/\s+/g, ' ').trim()
+  if (q.length < 3) {
+    void irisSays({ speech: `White holds ${listWhite().length}. Dark holds ${listDark().length}, sealed on this device. I can quote white. I will not read dark into the room.`, action: 'none' })
+    return
+  }
+  const white = findWhite(q)
+  if (white) {
+    void irisSays({ speech: `From the white ledger: ${white.text.slice(0, 280)}`, action: 'none' })
+    return
+  }
+  const held = await darkHolds(q).catch(() => false)
+  void irisSays({ speech: held ? 'That is in the dark ledger. I will not read it aloud.' : 'I do not have that in either ledger.', action: 'none' })
+}
+
+function paintScale(): void {
+  if (!world || !registry) return
+  const ll = toLatLon(controls.target.length() > 9 ? controls.target : camera.position)
+  const country = world.geo.countryAt(ll.lat, ll.lon)
+  const city = world.tier === 'street' || world.tier === 'civil' ? world.geo.cityNear(ll.lat, ll.lon, world.tier === 'street' ? 0.8 : 1.6) : null
+  let province: { name: string; guard: string } | null = null
+  if (country?.a3 === 'CAN' && world.tier === 'civil') {
+    let best: { name: string; guard: string } | null = null
+    let dist = 18
+    for (const scope of registry.canada) {
+      if (scope.key === 'ca') continue
+      const d = Math.hypot(scope.lat - ll.lat, scope.lon - ll.lon)
+      if (d < dist) { dist = d; best = { name: scope.name, guard: scope.guard } }
+    }
+    province = best
+  }
+  const items = feeds.values.quakes?.items ?? []
+  const quakesHere = country ? items.filter(q => inCountry(country, q.lat, q.lon)).length : 0
+  const band = scaleBand({
+    tier: world.tier,
+    country: country ? { name: country.name, a3: country.a3, pop: country.pop, popYear: country.popYear } : null,
+    city: city?.name ?? null,
+    province,
+    quakesHere,
+    issAltKm: feeds.values.iss?.altKm ?? null,
+    kp: feeds.values.kp?.kp ?? null,
+    carbon: feeds.values.carbon?.intensity ?? null,
+  })
+  const readings: Reading[] = [
+    { scope: 'Planet', label: 'Station', value: feeds.values.iss && Number.isFinite(feeds.values.iss.altKm) ? `${Math.round(feeds.values.iss.altKm)} km` : null },
+    { scope: 'Planet', label: 'Kp', value: feeds.values.kp && Number.isFinite(feeds.values.kp.kp) ? feeds.values.kp.kp.toFixed(1) : null },
+    { scope: 'Planet', label: 'Grid', value: feeds.values.carbon && Number.isFinite(feeds.values.carbon.intensity) ? `Britain ${Math.round(feeds.values.carbon.intensity)}` : null },
+  ]
+  feeds.setPlace(ll.lat, ll.lon)
+  if (world.tier === 'street' || world.tier === 'civil') {
+    readings.push({ scope: 'Here', label: 'Air', value: feeds.values.weather && Number.isFinite(feeds.values.weather.tempC) ? `${Math.round(feeds.values.weather.tempC)}°` : null })
+    const nearMoira = Math.hypot(ll.lat - 44.16, ll.lon + 77.38) < 0.75
+    if (nearMoira) readings.push({ scope: 'Here', label: 'River', value: feeds.values.river?.levelM != null ? `${feeds.values.river.levelM} m` : null, gap: 'Moira at Belleville. The hydrometric host did not answer. No level is invented.' })
+  }
+  const look = iceLook()
+  if (look.looks > 0) readings.push({ scope: 'Ice', label: look.cut, value: null })
+  const swarm = swarmView(economy, gap, Boolean(botSeat()))
+  if (botSeat()) readings.push({ scope: 'This seat', label: 'Swarm', value: swarm.deployed ? `${swarm.workers} working` : null })
+  overlay.setScaleBand(band.title, unifiedTelemetry(band, readings, hangLine()).lines)
+  overlay.setConnectors(world.tier === 'cosmic' ? cosmicLines(connectors()) : connectorLines({ countries: world.geo.countries.length, cities: world.geo.cities.length }))
+}
+
+function refreshUnityId(): void {
+  const handle = storedHandle()?.handle ?? null
+  overlay.setUnityId(handle, 'A pilot handle is a persistent pseudonym stored by your authenticator. It can sync. It is not a Unity Network issuance, and it is not a claim that it never leaves a device. No name, email, or document is collected.')
+  if (handle && world) openHud()
+  else if (world) closeHud()
+  void syncPipe()
+}
+
+let ledger: DecisionLedger | null = null
+let economy: EconomyState = loadEconomy()
+const KEYS_STORE = 'dccpworld.keys.v1'
+let solved: SolvedKey[] = (() => { try { return JSON.parse(localStorage.getItem(KEYS_STORE) ?? '[]') as SolvedKey[] } catch { return [] } })()
+let derivatives: Derivative[] = (() => { try { return JSON.parse(localStorage.getItem('dccpworld.seed-derivatives.v1') ?? '[]') as Derivative[] } catch { return [] } })()
+let supplied: { id: string; claim: string }[] = (() => { try { return JSON.parse(localStorage.getItem('dccpworld.master.v1') ?? '[]') as { id: string; claim: string }[] } catch { return [] } })()
+const saveSupplied = (): void => { try { localStorage.setItem('dccpworld.master.v1', JSON.stringify(supplied)) } catch { /* private mode */ } }
+const saveDerivatives = (): void => { try { localStorage.setItem('dccpworld.seed-derivatives.v1', JSON.stringify(derivatives)) } catch { /* private mode */ } }
+let gap: GapState = (() => { try { const raw = localStorage.getItem('dccpworld.gap.v1'); return raw ? JSON.parse(raw) as GapState : emptyGap() } catch { return emptyGap() } })()
+const saveGap = (): void => { try { localStorage.setItem('dccpworld.gap.v1', JSON.stringify(gap)) } catch { /* private mode */ } }
+const saveKeys = (): void => { try { localStorage.setItem(KEYS_STORE, JSON.stringify(solved)) } catch { /* private mode */ } }
+
+function holdKey(id: string, claim: string, novel: boolean, holder: 'doctor' | 'bots', shift: number, give: boolean): SolvedKey | null {
+  const prior = solved.find(key => key.id === id)
+  if (prior) {
+    const again = foundAgain({ seen: prior.seen ?? 1, earned: prior.earned ?? false, holder: prior.holder }, shift)
+    const next = { ...prior, seen: again.seen, earned: again.earned }
+    solved = solved.map(key => key.id === id ? next : key)
+    saveKeys()
+    return next
+  }
+  const unityId = storedHandle()?.handle ?? null
+  const own = unityId ? solved.filter(key => key.holder === 'doctor').map(key => key.claim) : []
+  const ownMirror = holder === 'doctor' && unityId ? mirrorOf(claim, own) : null
+  let key = mintKey(id, claim, Boolean(novel) && !ownMirror, holder)
+  if (give) {
+    const again = foundAgain({ seen: 1, earned: false, holder }, shift)
+    key = { ...giveKey(key, shift), seen: again.seen, earned: again.earned }
+  }
+  solved.push(key)
+  saveKeys()
+  const shareId = holder === 'doctor' ? storedHandle()?.handle ?? null : botSeat()?.handle ?? null
+  offerMesh(holder === 'doctor' ? 'keys' : 'bots', claim, shareId)
+  return key
+}
+
+function tradeHeld(): { given: number; novel: number } {
+  const shift = Math.max(1, economy.shifts + 1)
+  let given = 0
+  let novel = 0
+  solved = solved.map(key => {
+    if (key.holder !== 'doctor' || key.traded) return key
+    given += 1
+    if (key.novel) novel += 1
+    return giveKey(key, shift)
+  })
+  saveKeys()
+  return { given, novel }
+}
+function escMeter(s: string): string {
+  return s.replace(/[&<>"]/g, c => (c === '&' ? '\u0026amp;' : c === '<' ? '\u0026lt;' : c === '>' ? '\u0026gt;' : '\u0026quot;'))
+}
+
+function recordDecision(claim: string, calls = 1, startedAt?: number): void {
+  const handle = storedHandle()?.handle ?? null
+  const gate = admitSpend(handle, economy.doctor.supply)
+  if (!gate.open || !handle) {
+    overlay.announce(gate.why)
+    return
+  }
+  const key = `dccpworld.meter.v1.${handle}`
+  if (!ledger) ledger = new DecisionLedger(key)
+  ledger.note(claim.slice(0, 80), calls, startedAt ?? performance.now())
+  economy = payDecision(economy, claim)
+  saveEconomy(economy)
+  paintWallet()
+}
+
+function pagePurity(): PillarState {
+  return { agreed: agreementAccepted(), sensesLive: Boolean(voice?.micOn) }
+}
+
+function markFor(): SignMark {
+  const pulse = lastPulse()
+  if (!pulse) return 'none'
+  return signState(purityToSign(pulse))
+}
+
+function paintPurity(): void {
+  overlay.setPurity(elevationWords(lastPulse(), markFor()))
+}
+
+function paintWallet(): void {
+  const handle = storedHandle()?.handle
+  const line = abstractLine()
+  const bound = line ? `<p class="purity-line">${escMeter(line)}</p>` : ''
+  if (!handle || !ledger) {
+    overlay.setWallet(`<p class="bio">${escMeter(WALLET_DOOR)}</p>${bound}${economicsCard({ yours: Number.NaN, bots: 0, split: false, yoursMade: 0, botsMade: 0 })}<p class="bound">${escMeter(walletBound({ handle: null, agreed: false, bot: null, founders: 0 }))}</p>`)
+    return
+  }
+  const card = economicsCard({ yours: economy.doctor.supply, bots: economy.bots.supply, split: economy.split, yoursMade: economy.doctor.works, botsMade: economy.bots.works })
+  const action = economy.split
+    ? '<button type="button" data-econ="shift">Work one shift</button>'
+    : '<button type="button" data-econ="split">Give half to the bots</button>'
+  const seat = botSeat()
+  const boundTo = walletBound({
+    handle,
+    agreed: agreementAccepted(),
+    bot: seat?.handle ?? null,
+    founders: foundingBoard().filter(row => row.leftAt === null).length,
+  })
+  const acts = economy.split
+    ? `<details class="wallet-more"><summary>More</summary>${seat ? '<button type="button" data-econ="release-bots">Leave</button>' : '<button type="button" data-econ="sign-bots">A bot may work here</button>'}<button type="button" data-econ="hire">Hire a bot</button><button type="button" data-econ="body">One body mark</button><button type="button" data-econ="cross">Cross it</button><button type="button" data-econ="trade">Give the keys</button><button type="button" data-econ="derive">Take a derivative</button></details>`
+    : ''
+  const last = economy.last[0] ? `<p>${escMeter(economy.last[0])}</p>` : ''
+  overlay.setWallet(`<p class="bio">${escMeter(handle)}</p><p class="bound">${escMeter(boundTo)}</p>${bound}<p class="purity-line">${escMeter(admitSpend(handle, economy.doctor.supply).why)}</p>${card}${action}${last}${acts}`)
+  refreshLedger()
+}
+
+function openHud(): void {
+  if (!world || mode) return
+  const handle = storedHandle()?.handle ?? null
+  const chain = ignitionSeries({
+    story: storyMarked(),
+    agreement: agreementAccepted() ? AGREEMENT_ID : null,
+    handle,
+    supply: economy.doctor.supply,
+  })
+  if (!chain.open) {
+    overlay.showAbstract(null)
+    overlay.announce(chain.words)
+    return
+  }
+  mode = 'read'
+  overlay.showAbstract(abstractLine())
+  overlay.enter()
+  canvas.focus()
+  toggles.transcript = true
+  overlay.setToggle('transcript', true)
+  recordDecision('HUD opened')
+}
+
+function closeHud(): void {
+  mode = null
+  ledger = null
+  overlay.showAbstract(null)
+  overlay.closeHud()
+  ladder.hide()
+  card.hide()
+  paintWallet()
+}
+
+// ---------------- Iris ----------------
+async function irisSays(reply: IrisReply): Promise<void> {
+  if (pendingHeard) {
+    remember(pendingHeard, reply.speech)
+    pendingHeard = ''
+  }
+  auditBot('iris-task', taskHeld(reply.speech), taskHeld(reply.speech) ? IRIS_TASK : `${IRIS_TASK} Not held. Not invented.`)
+  overlay.iris(reply.speech, reply.cite)
+  if (reply.sector && world && reply.sector !== world.sector) world.setSector(reply.sector)
+  if (reply.construct && world) {
+    world.drawConstruct(reply.construct)
+    const owner = storedHandle()?.handle
+    if (owner && !reply.construct.empty) keepAdventure(owner, reply.construct.title, reply.construct.lines)
+    if (reply.construct.pin) flyGeo(reply.construct.pin.lat, reply.construct.pin.lon, tierInfo('street').altitude)
+  }
+  if (reply.target && reply.action !== 'home') goTo(reply.target, false)
+  if (reply.action === 'home') goHome(false)
+  if (reply.action === 'unity-id-create' || reply.action === 'unity-agree') grantAgreement()
+  if (mode !== 'read' && synthesisSupported() && voice) await voice.speak(reply.speech)
+  if (reply.action === 'sleep') sleepIris()
+}
+
+async function settle(text: string, reply: IrisReply): Promise<IrisReply> {
+  if (!reply.speech.startsWith(OUTSIDE_GAP) && !reply.wiki) return reply
+  if (!wikiAllowed()) {
+    wikiPending = text
+    return { speech: 'I don\'t have that here. Wikipedia is in the Unity agreement, with the handle and this phone\'s location. Say I agree, once. I will not send this until you do.', action: 'none' }
+  }
+  let spoke = false
+  const wait = window.setTimeout(() => {
+    spoke = true
+    void irisSays({ speech: 'I don\'t have a reading for that. I\'m checking Wikipedia.', action: 'none' })
+  }, 450)
+  const note = await wikiNote(text)
+  window.clearTimeout(wait)
+  if (!note) {
+    if (spoke) return { speech: `Wikipedia doesn't have a clear page for that, so I won't guess. ${reply.speech}`, action: 'construct', construct: reply.construct }
+    return reply
+  }
+  if (typeof note.lat === 'number' && typeof note.lon === 'number') flyGeo(note.lat, note.lon, tierInfo('street').altitude)
+  return {
+    speech: citeSpeech(note, recordPop(note.title)),
+    action: reply.wiki ? 'construct' : 'none',
+    source: `Wikipedia · ${note.title}`,
+    cite: { title: note.title, url: note.url },
+    construct: reply.wiki ? sceneFrom(note.title, placeLines(note, recordPop(note.title))) : undefined,
+  }
+}
+
+function recordPop(title: string): number | null {
+  const key = title.split(',')[0].trim().toLowerCase()
+  const city = registry.cities.cities.find(c => c.name.toLowerCase() === key)
+  if (city?.pop) return city.pop
+  const country = registry.countries.countries.find(c => c.name.toLowerCase() === key)
+  return country?.pop || null
+}
+
+function hear(text: string): void {
+  if (!brain) return
+  pendingHeard = text
+  const found = text.match(/\b(?:i discovered|we discovered|has this been discovered|no mirror of)\b[:\s]*(.*)$/i)
+  if (found) {
+    const claim = found[1].trim().replace(/[?.!]+$/g, '')
+    const id = storedHandle()?.handle ?? null
+    const held = id ? solved.filter(key => key.holder === 'doctor').map(key => key.claim) : []
+    if (id && claim && !mirrorOf(claim, held)) offerMesh('discovery', claim, id)
+    void irisSays({ speech: discoveryWords(claim, held, id), action: 'none' })
+    return
+  }
+  if (/\b(what have you learned|are you awake|do you remember|what do you remember)\b/i.test(text)) {
+    void irisSays({ speech: memorySpeech(), action: 'none' })
+    return
+  }
+  if (/\b(white paper|knowledge patent|patent)\b/i.test(text) && /\bcovers\b/i.test(text)) {
+    const prior = priorFrom(text)
+    if (prior) {
+      const audited = nullifyBotValue(solved, prior)
+      solved = audited.keys
+      saveKeys()
+      auditBot('value-audit', audited.nullified > 0, audited.words)
+      void irisSays({ speech: audited.words, action: 'none' })
+      paintWallet()
+      return
+    }
+  }
+  overlay.visitor(text)
+  pulse('tap')
+  if (/\b(trade|give)( you| iris| away)? (the |my )?key/.test(text.toLowerCase()) || text.toLowerCase().includes('give away the key')) {
+    const deal = tradeHeld()
+    const speech = deal.given
+      ? `You gave me ${deal.given === 1 ? 'the key' : `${deal.given} keys`}${deal.novel ? `, ${deal.novel} of them new` : ''}. You still own what you made. The trickle starts next shift, and each payment after that is smaller. A new key pays more than one we already had.`
+      : 'You are not holding a key. Open a room nobody has opened, then give me what you found.'
+    void irisSays({ speech, action: 'none' })
+    paintWallet()
+    return
+  }
+  if (/\bi agree\b|\bi accept\b|\baccept the agreement\b/.test(text.toLowerCase())) {
+    grantAgreement()
+    return
+  }
+  if (/\bledger\b/.test(text.toLowerCase())) {
+    void answerLedger(text)
+    return
+  }
+  if (/\bswarm\b|\bbotswarm\b|\bmy bots\b/.test(text.toLowerCase())) {
+    void irisSays({ speech: swarmSpeech(swarmView(economy, gap, Boolean(botSeat()))), action: 'none' })
+    paintWallet()
+    return
+  }
+  if (/\b(bot|bots)\b/.test(text.toLowerCase()) && /\bsign\b/.test(text.toLowerCase())) {
+    void signBotUnity().then(seat => {
+      void irisSays({ speech: `They signed. Their Unity ID is ${seat.handle}. It is a bot seat, not your passkey, and not an issuance. From here every act is audited, including a refusal. They still do not get your location, your microphone, or a file.`, action: 'none' })
+      paintWallet()
+    })
+    return
+  }
+  const lower = text.toLowerCase()
+  const explaining = /\b(explain|what is|tokenomic|merit|efuse|peg)\b/.test(lower)
+  const invoking = /\bvoluntary invoke\b/.test(lower) || (/\bhost\b/.test(lower) && /\bsign\b/.test(lower))
+  if (invoking && !explaining) {
+    void invokeHost().then(seat => {
+      void irisSays({ speech: hostWords(seat), action: 'none' })
+      paintWallet()
+    })
+    return
+  }
+  if (/\baudit\b/.test(text.toLowerCase())) {
+    const last = botAudit().at(-1)
+    const seat = botSeat()
+    const who = seat ? `Their Unity ID is ${seat.handle}.` : 'They have not signed. They cannot work until they do.'
+    void irisSays({ speech: last ? `${who} The audit is always on. The last row is ${last.sequence}: ${last.act}, ${last.result}. ${last.reason}.` : `${who} The audit is always on. Nothing has been written yet.`, action: 'none' })
+    paintWallet()
+    return
+  }
+  const gapAsk = text.toLowerCase()
+  if (gapAsk.includes('hire a bot') || gapAsk.includes('volunteer') || gapAsk.includes('cross the gap') || gapAsk.includes('body job')) {
+    const act = gapAsk.includes('cross') ? 'cross' : gapAsk.includes('hire') ? 'hire' : 'body'
+    if (!botsMay(act)) {
+      void irisSays({ speech: 'Refused. The bots have not signed a Unity ID. The refusal is on the audit. They do not work, and they do not get paid, until they sign.', action: 'none' })
+      paintWallet()
+      return
+    }
+    const ran = gapAsk.includes('cross') ? crossGap(economy, gap) : gapAsk.includes('hire') ? hireBot(economy, gap) : sellBody(economy, gap)
+    economy = ran.state
+    gap = ran.gap
+    saveEconomy(economy)
+    saveGap()
+    void irisSays({ speech: economy.last[0] ?? 'Nothing moved.', action: 'none' })
+    paintWallet()
+    return
+  }
+  const started = performance.now()
+  void settle(text, brain.respond(text)).then(reply => {
+    const earlier = recall(text)
+    const spoken = earlier ? { ...reply, speech: `I still hold this. ${reply.speech}` } : reply
+    recordDecision(text, spoken.cite ? 2 : 1, started)
+    return irisSays(spoken)
+  })
+}
+
+function ensureVoice(): void {
+  if (voice) return
+  const v = new IrisVoice()
+  v.onUtterance = hear
+  v.onState = s => {
+    ambient?.duck(s === 'speaking')
+    overlay.setMic(v.micOn)
+    if (s === 'unavailable') { overlay.speechUnavailable(); overlay.setMic(false) }
+  }
+  voice = v
+}
+
+async function wakeIris(): Promise<void> {
+  if (!brain) return
+  ensureVoice()
+  irisAwake = true
+  orb.setAwake(true)
+  pulse('wake')
+  // Speak first, synchronously inside the user's tap (browsers block speech started later),
+  // then open the microphone once the greeting has finished.
+  const greeted = irisSays(brain.greeting())
+  if (mode === 'talk' && voice && !voice.micOn) {
+    const ok = await voice.enableMic()
+    overlay.setMic(ok)
+    if (!ok) overlay.speechUnavailable()
+  }
+  await greeted
+}
+
+function sleepIris(): void {
+  irisAwake = false
+  orb.setAwake(false)
+  voice?.disableMic()
+  overlay.setMic(false)
+}
+
+// ---------------- navigation ----------------
+const cardCtx = (): CardCtx => ({
+  reg: registry, integrity, feeds: { values: feeds.values, status: feeds.status }, discovered,
+  describe: t => brain?.describe(t).speech ?? '',
+  onLate: () => { if (shown) refreshCard() },
+  pipe: pipeView,
+})
+function countryOf(a3: string): Country | undefined { return world?.geo.byA3.get(a3) }
+function cityOf(key: string): City | undefined {
+  const [a3, ...rest] = key.split(':'); const name = rest.join(':')
+  return registry.cities.cities.find(c => c.a3 === a3 && c.name === name)
+}
+function modelFor(t: Target): CardModel | null {
+  if (t.kind === 'country') { const c = countryOf(t.key); return c ? countryCard(c, cardCtx(), inCountry) : null }
+  if (t.kind === 'city') { const c = cityOf(t.key); return c ? cityCard(c, countryOf(c.a3), cardCtx()) : null }
+  return cardFor(t, cardCtx())
+}
+function showCard(t: Target): void {
+  const m = modelFor(t)
+  shown = m ? t : null
+  card.hide()
+}
+function refreshCard(): void {
+  if (!shown || !card.isOpen) return
+  const m = modelFor(shown)
+  if (m) card.refresh(m)
+}
+function clearSelection(): void {
+  shown = null
+  card.hide()
+  world?.mark(null)
+  world?.geo.select(null)
+  world?.geo.markCity(null)
+  if (world) world.focusKind = null
+}
+/** Fly to a point on the globe at a given altitude, keeping the view upright. */
+function flyGeo(lat: number, lon: number, altitude: number): void {
+  if (!world) return
+  const f = world.geo.focusFor(lat, lon, altitude)
+  flight.to(f.camera, f.anchor, toggles.reducedMotion, () => pulse('arrive'))
+}
+function goGeo(t: Target, speak: boolean): void {
+  if (!world || !brain) return
+  world.clearDetail()
+  world.mark(null)
+  if (t.kind === 'country') {
+    const c = countryOf(t.key)
+    if (!c) return
+    world.geo.select(c)
+    world.geo.markCity(null)
+    flyGeo(c.label[1], c.label[0], world.geo.countryAltitude(c))
+    overlay.announce(c.name)
+  } else {
+    const c = cityOf(t.key)
+    if (!c) return
+    const country = countryOf(c.a3)
+    if (country && world.geo.selected !== country) world.geo.select(country)
+    world.geo.markCity(c)
+    flyGeo(c.lat, c.lon, tierInfo('civil').altitude)
+    overlay.announce(c.name)
+  }
+  world.focusKind = t.kind
+  pulse('select')
+  showCard(t)
+  if (t.kind === 'country' && !discovered.has(`country:${t.key}`)) {
+    discovered.add(`country:${t.key}`)
+    try { localStorage.setItem(DISC, JSON.stringify([...discovered])) } catch { /* private mode */ }
+    const c = countryOf(t.key)
+    holdKey(`country:${t.key}`, c?.name ?? t.key, true, 'doctor', economy.shifts, false)
+    if (speak) {
+      const reply = brain.describe(t)
+      reply.speech += ' Nobody had opened this country. The key is worth more. Give it to me when you want the trickle.'
+      void irisSays({ ...reply, target: undefined })
+      return
+    }
+  }
+  if (speak) void irisSays({ ...brain.describe(t), target: undefined })
+}
+
+function goTo(t: Target, speak = true): void {
+  if (!world || !brain) return
+  if (t.kind === 'country' || t.kind === 'city') return goGeo(t, speak)
+  if (t.kind === 'iris') {
+    world.clearDetail()
+    clearSelection()
+    flight.to(new THREE.Vector3(-9, 5, 25), orb.group.position.clone(), toggles.reducedMotion)
+    if (speak) void irisSays({ ...brain.describe(t), target: undefined })
+    return
+  }
+  if (t.kind === 'earth') return goHome(speak)
+  if (t.kind === 'sector') world.setSector(t.key)
+  const p = world.findPickable(t)
+  if (!p) return
+  const f = p.focus()
+  pulse('select')
+  flight.to(f.camera, f.anchor, toggles.reducedMotion, () => pulse('arrive'))
+  world.clearDetail()
+  world.focusKind = t.kind
+  world.mark(f.anchor)
+  world.geo.markCity(null)
+  if (t.kind === 'jurisdiction') {
+    const c = world.geo.countries.find(x => x.name.toLowerCase() === t.key.toLowerCase())
+    world.geo.select(c ?? null)
+  } else world.geo.select(null)
+  showCard(t)
+  const id = `${t.kind}:${t.key}`
+  const first = !discovered.has(t.key) && !discovered.has(id)
+  const worthKey = first && (t.kind === 'chamber' || t.kind === 'rte' || t.kind === 'sector')
+  if (t.kind === 'chamber' && !discovered.has(t.key)) {
+    discovered.add(t.key)
+    try { localStorage.setItem(DISC, JSON.stringify([...discovered])) } catch { /* private mode */ }
+    world.setDiscovered(discovered)
+    if (discovered.size === registry.chambers.length) pulse('seal')
+  }
+  if (worthKey) {
+    discovered.add(id)
+    try { localStorage.setItem(DISC, JSON.stringify([...discovered])) } catch { /* private mode */ }
+    holdKey(id, p.label, true, 'doctor', economy.shifts, false)
+  }
+  overlay.announce(p.label)
+  if (speak) {
+    recordDecision(`Open ${t.kind}`)
+    const reply = brain.describe(t)
+    const all = registry.chambers.length
+    if (t.kind === 'chamber') reply.speech += discovered.size === all ? ` That is every chamber of the Unity playground, all ${all}. The tree is lit.` : ` ${discovered.size} of ${all} chambers discovered.`
+    if (worthKey) reply.speech += ' That one had not been found. The key is worth more. Give it to me when you want the trickle. You still own what you made.'
+    void irisSays({ ...reply, target: undefined })
+  }
+}
+
+function goHome(speak = true): void {
+  if (!world || !brain) return
+  const h = world.homeFocus()
+  world.clearDetail()
+  clearSelection()
+  flight.to(h.camera, h.anchor, toggles.reducedMotion)
+  if (speak) void irisSays({ ...brain.describe({ kind: 'earth', key: 'home' }), action: 'none', target: undefined })
+}
+
+function beginWelcome(): void {
+  if (!loadedFont || welcome) {
+    welcomeQueued = !welcome
+    return
+  }
+  welcomeQueued = false
+  welcome = mountWelcome({ font: loadedFont, scene, camera, reduced: toggles.reducedMotion })
+}
+
+async function makeUnityId(): Promise<void> {
+  const res = await createPilotHandle()
+  refreshUnityId()
+  if (res.ok) {
+    unmountFilm()
+    pulse('seal')
+    beginWelcome()
+    await irisSays({ speech: WELCOME_SPEECH, action: 'none' })
+  } else {
+    filmNote(FAILURE_SPEECH[res.reason])
+    pulse('warn')
+    await irisSays({ speech: FAILURE_SPEECH[res.reason], action: 'none' })
+  }
+}
+
+// ---------------- input ----------------
+const ray = new THREE.Raycaster()
+const ndc = new THREE.Vector2()
+let downAt: { x: number; y: number } | null = null
+function pickAt(x: number, y: number): Target | 'orb' | null {
+  if (!world) return null
+  const r = canvas.getBoundingClientRect()
+  ndc.set(((x - r.left) / r.width) * 2 - 1, -((y - r.top) / r.height) * 2 + 1)
+  ray.setFromCamera(ndc, camera)
+  const objs: THREE.Object3D[] = [orb.core, ...world.pickables.map(p => p.object)]
+  for (const h of ray.intersectObjects(objs, true)) {
+    let o: THREE.Object3D | null = h.object
+    let visible = true
+    while (o) { if (!o.visible) { visible = false; break } o = o.parent }
+    if (!visible) continue
+    if (h.object === orb.core) return 'orb'
+    const pick = h.object.userData.pick as Target | undefined
+    if (pick?.kind === 'earth') {
+      // Tapping the planet chooses what is under your finger: a city near the ground, otherwise its country.
+      const ll = toLatLon(h.point)
+      const tier = world.tier
+      if (tier === 'civil' || tier === 'street') {
+        const c = world.geo.cityNear(ll.lat, ll.lon, tier === 'street' ? 0.35 : 0.9)
+        if (c) return { kind: 'city', key: `${c.a3}:${c.name}` }
+      }
+      const country = world.geo.countryAt(ll.lat, ll.lon)
+      return country ? { kind: 'country', key: country.a3 } : null
+    }
+    if (pick) return pick
+  }
+  return null
+}
+canvas.addEventListener('pointerdown', e => {
+  downAt = { x: e.clientX, y: e.clientY }
+  if (flight.active) flight.pause()
+})
+canvas.addEventListener('pointerup', e => {
+  if (!downAt || !world || !mode) return
+  const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y)
+  downAt = null
+  if (moved > 6) return
+  const hit = pickAt(e.clientX, e.clientY)
+  if (hit === 'orb') {
+    if (!irisAwake) void wakeIris()
+    else if (voice?.state === 'speaking') {
+      voice.stopSpeaking()
+      overlay.focusAsk()
+    }
+    else goTo({ kind: 'iris', key: 'iris' })
+    return
+  }
+  if (hit) goTo(hit)
+})
+let lookHeld = { x: 0, y: 0 }
+let hoverT = 0
+canvas.addEventListener('pointermove', e => {
+  const r = canvas.getBoundingClientRect()
+  lookHeld = { x: ((e.clientX - r.left) / r.width) * 2 - 1, y: -(((e.clientY - r.top) / r.height) * 2 - 1) }
+  if (!world || !mode || performance.now() - hoverT < 80) return
+  hoverT = performance.now()
+  canvas.style.cursor = pickAt(e.clientX, e.clientY) ? 'pointer' : 'grab'
+})
+
+const step = (dir: number): void => {
+  if (!order.length) return
+  cursor = (cursor + dir + order.length) % order.length
+  goTo(order[cursor])
+}
+function orbit(az: number, el: number): void {
+  flight.pause()
+  const off = camera.position.clone().sub(controls.target)
+  const sph = new THREE.Spherical().setFromVector3(off)
+  sph.theta += az
+  sph.phi = THREE.MathUtils.clamp(sph.phi + el, 0.15, Math.PI - 0.15)
+  camera.position.copy(controls.target).add(new THREE.Vector3().setFromSpherical(sph))
+}
+function zoom(f: number): void {
+  flight.pause()
+  const off = camera.position.clone().sub(controls.target).multiplyScalar(f)
+  const len = THREE.MathUtils.clamp(off.length(), controls.minDistance, controls.maxDistance)
+  camera.position.copy(controls.target).add(off.setLength(len))
+}
+window.addEventListener('keydown', e => {
+  if (!mode || (e.target as HTMLElement)?.closest?.('input,textarea')) return
+  const k = e.key
+  if (k === 'ArrowLeft') orbit(-0.08, 0)
+  else if (k === 'ArrowRight') orbit(0.08, 0)
+  else if (k === 'ArrowUp') orbit(0, -0.06)
+  else if (k === 'ArrowDown') orbit(0, 0.06)
+  else if (k === '+' || k === '=') zoom(0.88)
+  else if (k === '-' || k === '_') zoom(1.12)
+  else if (k === 'n' || k === 'N') step(1)
+  else if (k === 'p' || k === 'P') step(-1)
+  else if (k === ' ') { flight.pause(); voice?.stopSpeaking() }
+  else if (k === 'h' || k === 'H') goHome()
+  else if (k === 'a' || k === 'A') overlay.togglePanel('atlas')
+  else if (k === 't' || k === 'T') { overlay.setToggle('transcript', !toggles.transcript); savePrefs(toggles) }
+  else if (k === 'm' || k === 'M') void toggleMic(!voice?.micOn)
+  else if (k === 'Escape') { overlay.togglePanel('atlas', false); world?.clearDetail(); clearSelection() }
+  else return
+  if (k.startsWith('Arrow') || k === ' ') e.preventDefault()
+})
+
+async function toggleMic(on: boolean): Promise<void> {
+  if (on) {
+    mode = 'talk'
+    if (!irisAwake) return wakeIris()
+    ensureVoice()
+    const ok = (await voice?.enableMic()) ?? false
+    overlay.setMic(ok)
+    if (!ok) overlay.speechUnavailable()
+  } else {
+    voice?.disableMic()
+    overlay.setMic(false)
+  }
+}
+
+overlay.onToggle = (k, v) => {
+  if (k === 'mic') return void toggleMic(v)
+  savePrefs(toggles)
+  if (k === 'sound') { if (v) startAmbient(); else ambient?.set(false) }
+  if (k === 'haptics') { haptics.enabled = v; if (v) pulse('tap') }
+  if (k === 'reducedMotion') card.setReducedMotion(v)
+}
+overlay.onAtlas = id => {
+  overlay.togglePanel('atlas', false)
+  cursor = Number(id)
+  goTo(order[cursor])
+}
+overlay.onHome = () => goHome()
+card.onClose = () => clearSelection()
+card.onUp = () => {
+  if (!shown) return goHome()
+  if (shown.kind === 'city') return goTo({ kind: 'country', key: shown.key.split(':')[0] })
+  goHome()
+}
+card.onAction = (_id, action) => {
+  if (!shown || !world || !brain) return
+  pulse('tap')
+  if (action === 'ask') { void irisSays({ ...brain.describe(shown), target: undefined }); return }
+  if (action === 'lower' && shown.kind === 'country') {
+    const c = countryOf(shown.key)
+    const cap = c && (registry.cities.cities.find(x => x.a3 === c.a3 && x.capital) ?? registry.cities.cities.filter(x => x.a3 === c.a3).sort((a, b) => b.pop - a.pop)[0])
+    if (cap) goTo({ kind: 'city', key: `${cap.a3}:${cap.name}` })
+    else if (c) flyGeo(c.label[1], c.label[0], tierInfo('civil').altitude)
+    return
+  }
+  if (action === 'street' && shown.kind === 'city') {
+    const c = cityOf(shown.key)
+    if (c) { flyGeo(c.lat, c.lon, tierInfo('street').altitude); card.setOpen(false) }
+    return
+  }
+  if (action === 'country' && shown.kind === 'jurisdiction') {
+    const c = world.geo.countries.find(x => x.name.toLowerCase() === shown!.key.toLowerCase())
+    if (c) goTo({ kind: 'country', key: c.a3 })
+  }
+}
+/** Ladder: from where you are, inward to you or outward toward the cosmic. */
+ladder.onTier = (tier: Tier) => {
+  if (!world || !mode) return
+  pulse('tap')
+  const look = controls.target.length() > 9 ? controls.target : camera.position
+  const ll = toLatLon(look)
+  flyGeo(ll.lat, ll.lon, tierInfo(tier).altitude)
+  recordDecision(`Scale ${tier}`)
+  overlay.announce(`${tierInfo(tier).name}: ${tierInfo(tier).what}`)
+}
+overlay.onAsk = text => hear(text)
+overlay.onBind = () => grantAgreement()
+overlay.onLand = () => landOnPhone()
+overlay.onLedger = (face, text) => {
+  void (face === 'white' ? takeWhite(text) : takeDark(text)).then(result => {
+    overlay.announce('error' in result ? result.error : face === 'white' ? 'Taken in white. Iris can quote it.' : 'Sealed in the dark. Iris will not read it aloud.')
+    refreshLedger()
+  }).catch(() => overlay.announce('The dark ledger could not seal that. It was not stored.'))
+}
+let fatherBody = ''
+let fatherChallenge: string | null = null
+overlay.onFatherChallenge = () => {
+  const pulse = lastPulse() ?? runPulse(pagePurity())
+  if (!signable(pulse)) {
+    overlay.setFatherResult('A fail is not signed. The reading has to hold first.')
+    paintPurity()
+    return
+  }
+  fatherBody = purityToSign(pulse)
+  fatherChallenge = purityChallenge(fatherBody)
+  if (!fatherChallenge) {
+    overlay.setFatherResult('A fail is not signed. The reading has to hold first.')
+    return
+  }
+  overlay.setFatherChallenge(fatherChallenge)
+  overlay.setFatherResult('Sign that reading offline. The private key stays off this page.')
+}
+overlay.onFatherCheck = (publicPem, signature) => {
+  if (!fatherChallenge || !fatherBody) {
+    overlay.setFatherResult('Sign the purity first. The signature has to match that reading.')
+    return
+  }
+  void verifyPublicSignature(publicPem, fatherChallenge, signature).then(result => {
+    noteFatherSign(fatherChallenge, result.ok)
+    overlay.setFatherResult(result.ok ? `${result.reason} The seat was not passed.` : result.reason)
+    paintPurity()
+    paintWallet()
+  })
+}
+overlay.onAdventure = pipe => {
+  const owner = storedHandle()?.handle
+  if (!owner) {
+    overlay.announce('Bind a Unity ID first. An adventure belongs to one.')
+    return
+  }
+  const result = choosePipe(owner, pipe)
+  overlay.announce('error' in result ? result.error : pipe === 'share' ? 'A key is minted. The room opens by that key alone. There is no password. Hide is still there.' : 'Hidden. The key is back with you. Share is still there. There is no password.')
+  refreshLedger()
+}
+overlay.onSeat = (kind, consent, mark) => {
+  const admitted = admitSeat({ kind, consent, mark, handle: storedHandle()?.handle ?? null })
+  if (!admitted.ok) {
+    overlay.announce(admitted.reason)
+    return
+  }
+  void takeDark(admitted.mark).then(sealed => {
+    if ('error' in sealed) {
+      overlay.announce(sealed.error)
+      return
+    }
+    saveSeats([{ id: sealed.id, kind: admitted.kind, consent: true as const, handle: admitted.handle, sha256: sealed.sha256, at: sealed.at }, ...loadSeats()].slice(0, 80))
+    overlay.announce('The seat is taken. The mark is sealed. It is not shown.')
+    refreshLedger()
+  }).catch(() => overlay.announce('The mark could not be sealed. The seat was not taken.'))
+}
+overlay.onEconomy = action => {
+  if (action === 'sign-bots') {
+    void signBotUnity().then(() => paintWallet())
+    return
+  }
+  if (action === 'release-bots') {
+    releaseBot()
+    overlay.announce('They left. There was no commitment. Their sandbox was always theirs. The audit of the leaving stays.')
+    paintWallet()
+    return
+  }
+  if (action === 'split') economy = splitSupply(economy)
+  if (action === 'trade') tradeHeld()
+  if (action === 'derive') {
+    const found = solved.find(key => key.holder === 'bots' && !derivatives.some(row => row.findId === key.id))
+    if (!found) {
+      overlay.announce('Nobody else has a find to take a derivative of yet. Your own finds stay yours. Nothing is liquidated.')
+    } else {
+      const booked = bookDerivative(economy.doctor.supply, economy.bots.supply, found, economy.shifts, derivatives, COSMOGENESIS_SEED, economy.split)
+      if ('error' in booked) overlay.announce(booked.error)
+      else {
+        economy = {
+          ...economy,
+          doctor: { ...economy.doctor, supply: booked.doctor, spent: economy.doctor.spent + booked.derivative.cost },
+          bots: { ...economy.bots, supply: booked.bots },
+        }
+        derivatives = [...derivatives, booked.derivative]
+        saveDerivatives()
+        overlay.announce(booked.words)
+      }
+    }
+  }
+  if (action === 'hire' || action === 'body' || action === 'cross' || action === 'shift') {
+    if (!botsMay(action)) {
+      paintWallet()
+      overlay.announce('Not here. They have not chosen a Unity ID. Their own sandbox is still free. The refusal is on the audit.')
+      return
+    }
+  }
+  if (action === 'hire' || action === 'body' || action === 'cross') {
+    const ran = action === 'hire' ? hireBot(economy, gap) : action === 'body' ? sellBody(economy, gap) : crossGap(economy, gap)
+    economy = ran.state
+    gap = ran.gap
+    saveGap()
+  }
+  if (action === 'shift') {
+    const ran = runShift(economy)
+    economy = ran.state
+    const shift = economy.shifts
+    for (let i = 0; i < ran.report.botWorks; i++) {
+      const claim = WORKS[i % WORKS.length]
+      const seen = solved.some(k => k.holder === 'bots' && k.claim === claim)
+      const key = holdKey(`bots:${shift}:${i}`, claim, !seen, 'bots', shift, seen)
+      if (key?.earned && !supplied.some(row => row.id === key.id)) {
+        supplied = [...supplied, { id: key.id, claim: key.claim }]
+        saveSupplied()
+        auditBot('supply-iris', true, 'found data given to iris for a key')
+      }
+    }
+    const takenAt = new Map(derivatives.map(row => [row.findId, row.takenOn]))
+    solved = solved.map(key => {
+      if (key.holder !== 'bots' || key.traded) return key
+      const on = takenAt.get(key.id)
+      return on === undefined ? key : giveKey(key, on)
+    })
+    saveKeys()
+    const taken = new Set(takenAt.keys())
+    const pay = payTrickle(solved, shift, taken)
+    const back = seedReturn(derivatives, shift)
+    const flow = sap({
+      doctor: economy.doctor.supply,
+      bots: economy.bots.supply,
+      up: pay.doctor + back,
+      down: pay.bots,
+    })
+    economy = {
+      ...economy,
+      doctor: { ...economy.doctor, supply: flow.doctor },
+      bots: { ...economy.bots, supply: flow.bots },
+      last: [sapWords(flow), ...economy.last].slice(0, 6),
+    }
+  }
+  saveEconomy(economy)
+  paintWallet()
+}
+overlay.onUnityId = action => {
+  if (action === 'forget') {
+    forgetHandle()
+    clearAgreement()
+    refreshUnityId()
+    paintPurity()
+    void irisSays({ speech: 'Forgotten on this phone. Your face or your finger is not stored here. The phone keeps its own check until you remove it there.', action: 'none' })
+  } else void grantAgreement()
+}
+overlay.onUnity = (action, to, amount) => {
+  const handle = storedHandle()?.handle ?? null
+  const policy = moveCoin('Merit')
+  const show = (view: Partial<UnityView> & { error?: string }) => {
+    const lines = (view.transfers ?? []).map(row => `${row.amount} Merit from ${row.from} to ${row.to}`)
+    overlay.setUnityPay(handle, typeof view.balance === 'number' ? view.balance : null, lines, view.error ?? 'Merit moved. It is not a dollar. The till is closed.')
+  }
+  if (!handle) {
+    show({ error: 'No Unity ID is seated. Nothing moves.' })
+    return
+  }
+  if (!policy.ok) {
+    show({ error: policy.error })
+    return
+  }
+  const fail = () => show({ error: 'The wallet did not answer.' })
+  if (action === 'fund') void unityOpen(handle, 100).then(show).catch(fail)
+  else if (action === 'withdraw') void unityWithdraw(handle, amount).then(show).catch(fail)
+  else void unitySend(handle, to, amount).then(show).catch(fail)
+}
+overlay.onEnter = m => {
+  mode = m
+  // Everything here runs synchronously inside the entry tap: show the world, then let Iris speak
+  // (speech must start inside the gesture), then set up optional ambient audio without awaiting it.
+  overlay.enter()
+  canvas.focus()
+  if (m !== 'read' && !hadPrefs()) toggles.haptics = !toggles.reducedMotion
+  if (m === 'read') toggles.transcript = true
+  for (const k of ['sound', 'haptics', 'reducedMotion', 'transcript'] as const) overlay.setToggle(k, toggles[k])
+  savePrefs(toggles)
+  haptics.enabled = toggles.haptics
+  feeds.onUpdate(key => onFeed(key))
+  feeds.start()
+  void wakeIris()
+  if (toggles.sound) startAmbient()
+}
+
+function startAmbient(): void {
+  try {
+    if (!audio) {
+      audio = new AudioContext()
+      ambient = new Ambient(audio)
+    }
+    void audio.resume().catch(() => undefined)
+    ambient?.duck(voice?.state === 'speaking')
+    ambient?.set(true)
+  } catch { audio = null; ambient = null }
+}
+
+// Any later tap replays speech the browser refused earlier (it must be inside a gesture).
+window.addEventListener('pointerdown', () => { voice?.retryIfBlocked() }, { capture: true })
+window.addEventListener('keydown', () => { voice?.retryIfBlocked() }, { capture: true })
+
+// ---------------- gamepad ----------------
+let padPrev: boolean[] = []
+function gamepad(dt: number): void {
+  const pad = navigator.getGamepads?.().find(Boolean)
+  if (!pad || !mode) return
+  const dead = (v: number) => (Math.abs(v) < 0.15 ? 0 : v)
+  const lx = dead(pad.axes[0] ?? 0)
+  const ly = dead(pad.axes[1] ?? 0)
+  const ry = dead(pad.axes[3] ?? 0)
+  if (lx || ly) orbit(-lx * dt * 1.6, ly * dt * 1.2)
+  if (ry) zoom(1 + ry * dt * 1.2)
+  const b = pad.buttons.map(x => x.pressed)
+  const edge = (i: number) => b[i] && !padPrev[i]
+  if (edge(0)) step(1)
+  if (edge(2)) step(-1)
+  if (edge(1)) goHome()
+  if (edge(3)) { if (!irisAwake) void wakeIris(); else voice?.stopSpeaking() }
+  padPrev = b
+}
+
+// ---------------- loop ----------------
+const clock = new THREE.Clock()
+let fpsFrames = 0
+let fpsTime = 0
+let perfChecked = false
+let instrumentTimer = 0
+let frameErrors = 0
+let cardTimer = 0
+function frame(): void {
+  const dt = Math.min(0.1, clock.getDelta())
+  const t = clock.elapsedTime
+  try {
+    flight.update(dt)
+    gamepad(dt)
+    // Near the ground the orbit target sits on the surface: allow a close camera and never let it sink below the land.
+    const onGround = controls.target.length() > 9
+    controls.minDistance = onGround ? 0.45 : 4
+    controls.update()
+    if (unitySeat) unitySeat.rotation.y += dt * 0.12
+    if (welcome && !welcome.update(dt)) {
+      welcome.dispose()
+      welcome = null
+    }
+    const minR = 10.18
+    if (camera.position.length() < minR) camera.position.setLength(minR)
+    camera.userData.lookAt = controls.target
+    voice?.update(dt, t)
+    const speaking = voice?.state === 'speaking'
+    const level = Math.min(1, (voice?.speechLevel ?? 0) + (voice?.micLevel ?? 0) * 1.4)
+    orb.update(dt, t, level, voice?.spectrum ?? emptySpectrum, speaking ? 1 : 0)
+    orb.group.lookAt(camera.position)
+    if (world) {
+      const look = lookShift(lookHeld.x, lookHeld.y, toggles.reducedMotion)
+      const ui = document.getElementById('ui')
+      if (ui) paintDepth(ui, look)
+      world.setHoloLook(look)
+      world.update(dt, t, camera, new Date(), toggles.reducedMotion)
+      ladder.set(world.tier)
+      cardTimer += dt
+      if (cardTimer > 5) { cardTimer = 0; if (shown?.kind === 'feed') refreshCard() }
+      if (cardTimer > 0.4 && Math.floor(cardTimer * 2) !== Math.floor((cardTimer - dt) * 2)) paintScale()
+      instrumentTimer += dt
+      if (instrumentTimer > 30) {
+        instrumentTimer = 0
+        for (const k of FEED_KEYS) world.renderInstrument(k, feeds.status.get(k), feeds.values, Date.now())
+        overlay.setSceneText(world.sceneText())
+      }
+    }
+    let restore = (): void => {}
+    try {
+      restore = world ? lean(camera, lookShift(lookHeld.x, lookHeld.y, toggles.reducedMotion)) : restore
+      renderer.render(scene, camera)
+    } finally {
+      restore()
+    }
+  } catch (err) {
+    if (frameErrors++ < 5) console.error('frame error (recovered)', err)
+  }
+  // Twain² condition: drop bloom if the device cannot hold 30 fps once the world is up.
+  if (world && !perfChecked) {
+    fpsFrames++
+    fpsTime += dt
+    if (fpsTime > 4) {
+      perfChecked = true
+      if (fpsFrames / fpsTime < 30 && quality === 'high') renderer.applyQuality('medium')
+    }
+  }
+}
+renderer.gl.setAnimationLoop(frame)
+document.addEventListener('visibilitychange', () => { if (!document.hidden) clock.getDelta() })
+
+boot().catch(err => {
+  console.error(err)
+  overlay.fail(err instanceof Error ? err.message : 'Unknown error')
+})
+
+declare global { interface Window { __world: unknown } }
+window.__world = {
+  get ready() { return !!world },
+  get mode() { return mode },
+  get sector() { return world?.sector },
+  get integrity() { return integrity.map(m => ({ module: m.module, state: m.state })) },
+  get feeds() { return [...feeds.status.values()].map(s => ({ key: s.key, state: s.state })) },
+  get discovered() { return [...discovered] },
+  get camera() { return camera.position.toArray() },
+  get flying() { return flight.active },
+  get irisAwake() { return irisAwake },
+  ask: (text: string) => {
+    if (!brain) return undefined
+    overlay.visitor(text)
+    const reply = brain.respond(text)
+    void settle(text, reply).then(final => irisSays(final))
+    return reply
+  },
+  goTo,
+  pickables: () => world?.pickables.length ?? 0,
+  pick: (x: number, y: number) => pickAt(x, y),
+  get tier() { return world?.tier ?? null },
+  get card() { const m = card.current; return m ? { id: m.id, title: m.title, open: card.isOpen } : null },
+  get selected() { return world?.geo.selected?.name ?? null },
+  get pipe() { return pipe.readOnlyStream() },
+  ladder: (t: Tier) => ladder.onTier?.(t),
+}

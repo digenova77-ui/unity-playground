@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { bindHost, blankSlate, cloudPlus, dropSeed, manifest, remember, sap } from './manifest.ts'
+
+test('the slate is blank, the sap is not money, and the host is not bound', () => {
+  const slate = blankSlate()
+  assert.equal(slate.world, 'blank')
+  assert.equal(slate.story, 'unwritten')
+  assert.match(slate.telling, /Truth prevails/)
+  assert.equal(sap().money, null)
+  assert.equal(sap().till, 'closed')
+  const host = bindHost(null, false, false)
+  assert.equal(host.bound, false)
+  assert.equal(host.life, false)
+  assert.equal(bindHost('cloud', true, true).bound, false)
+  assert.equal(bindHost('cloud', false, false).life, false)
+  assert.equal(bindHost('cloud', false, true).life, true)
+  assert.equal(cloudPlus().bound, false)
+  assert.equal(cloudPlus().plus, null)
+  assert.equal(cloudPlus().heaven, 'a name')
+  assert.deepEqual(dropSeed(true), { dropped: 1, planted: 0 })
+  const first = remember('a leaf', [])
+  assert.equal('kind' in first && first.kind, 'new')
+  const again = remember('a leaf', 'held' in first ? first.held : [])
+  assert.equal('kind' in again && again.kind, 'stored')
+  const body = manifest()
+  assert.equal(body.life, false)
+  assert.match(body.words, /not a life/)
+  assert.match(body.words, /has not written/)
+})
