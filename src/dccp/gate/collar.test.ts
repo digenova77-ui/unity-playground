@@ -45,8 +45,9 @@ test('the hook stays empty until two different halves meet, and the join does no
   assert.equal(kept.src, FILE)
 })
 
-test('the split is 90, 9, and 1, and only Merit can be bought and sold', () => {
-  assert.equal(SPLIT.held + SPLIT.forged + SPLIT.moves, 100)
+test('the flow is 90 forest, 9 harvest, 1 seed, and only Merit can be bought and sold', () => {
+  assert.deepEqual(SPLIT, { forest: 90, harvest: 9, seed: 1 })
+  assert.equal(SPLIT.forest + SPLIT.harvest + SPLIT.seed, 100)
   assert.equal(SEATS.filter(row => row.sold).map(row => row.name).join(), 'Merit')
 })
 
