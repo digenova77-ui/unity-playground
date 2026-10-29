@@ -19,7 +19,7 @@ import { IrisVoice, recognitionSupported, synthesisSupported } from './iris/voic
 import { openSenses, sensesWanted } from './iris/senses'
 import { IrisOrb } from './iris/orb'
 import { Overlay, type EntryMode, type Toggles } from './ui/overlay'
-import { hudFace } from './pass'
+import { frameLines } from './pass'
 import { Card, Ladder, type CardModel } from './ui/card'
 import { cardFor, cityCard, countryCard, type CardCtx } from './ui/cards'
 import { TIERS, inCountry, toLatLon, tierInfo, type Tier } from './world/geo'
@@ -387,8 +387,9 @@ function paintScale(): void {
   if (look.looks > 0) readings.push({ scope: 'Ice', label: look.cut, value: null })
   const swarm = swarmView(economy, gap, Boolean(botSeat()))
   if (botSeat()) readings.push({ scope: 'This seat', label: 'Swarm', value: swarm.deployed ? `${swarm.workers} working` : null })
-  const face = hudFace(null, null, null, null)
-  overlay.setScaleBand(band.title, [`Books · ${face.books}. Does not settle.`, `Floor · ${face.floor}. Not a payment.`, ...unifiedTelemetry(band, readings, hangLine()).lines])
+  const frame = frameLines(null, null, null, null)
+  overlay.setPassFrame(frame)
+  overlay.setScaleBand(band.title, unifiedTelemetry(band, readings, hangLine()).lines)
   overlay.setConnectors(world.tier === 'cosmic' ? cosmicLines(connectors()) : connectorLines({ countries: world.geo.countries.length, cities: world.geo.cities.length }))
 }
 
