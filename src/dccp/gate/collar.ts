@@ -132,13 +132,14 @@ export function ignite(circuit: { closed: true }, touch: boolean): { ignited: tr
   return { ignited: true }
 }
 
-/** 90 is held. 9 is forged. 1 is the only share that can be bought and sold. */
-export const SPLIT = { held: 90, forged: 9, moves: 1 } as const
+/** David's canon flow (2026-10-18): 90 to the forest (the whole ecosystem), 9 to the harvest (whoever did the work), 1 to the seed (the father seed). It is a flow, not coin seats. */
+export const SPLIT = { forest: 90, harvest: 9, seed: 1 } as const
+if (SPLIT.forest + SPLIT.harvest + SPLIT.seed !== 100) throw new Error('canon 90/9/1 must sum to 100')
 
 export const SEATS = [
-  { name: 'eFuse', share: SPLIT.held, sold: false, role: 'The bridge. It is not for sale.' },
-  { name: 'UniFi³', share: SPLIT.forged, sold: false, role: 'Forged in the fuse. It binds the contract. It is not for sale.' },
-  { name: 'Merit', share: SPLIT.moves, sold: true, role: 'The only one that moves. It is lost if the old world crosses the fuse.' },
+  { name: 'eFuse', sold: false, role: 'The bridge. It is not for sale.' },
+  { name: 'UniFi³', sold: false, role: 'Forged in the fuse. It binds the contract. It is not for sale.' },
+  { name: 'Merit', sold: true, role: 'The only one that moves. It is lost if the old world crosses the fuse.' },
 ] as const
 
 export function collar(front: string | null, back: string | null):

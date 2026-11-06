@@ -111,7 +111,7 @@ export function coinWords(handle: string | null): string {
     'Neither applies until it is bound to an identity. That identity is the Unity token. Unity is the seat, not a price.',
     seat,
     'Nothing is listed. Nothing is sent on a network. Only Merit moves, and only as test units from one Unity handle to another. eFuse does not move. Unity is not sent. The father record says the order and does not pay out. The till is closed.',
-    `The collar is ${SPLIT.held} held, ${SPLIT.forged} forged, and ${SPLIT.moves} that can be named. A first seat is face ${faceFor(true)}. A later seat is face ${faceFor(false)}. A place locks at ${POOL} seats and a run of ${RUN}. The dividend waits for that lock. Saying this did not list a coin.`,
+    `The flow is ${SPLIT.forest} to the forest, ${SPLIT.harvest} to the harvest, and ${SPLIT.seed} to the seed. A first seat is face ${faceFor(true)}. A later seat is face ${faceFor(false)}. A place locks at ${POOL} seats and a run of ${RUN}. The dividend waits for that lock. Saying this did not list a coin.`,
   ].join(' ')
 }
 
