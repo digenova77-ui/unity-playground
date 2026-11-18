@@ -988,3 +988,142 @@ src/routes/v2/dclm/telemetry
 ## Caution
 
 No architectural trunk is declared in this phase. A trunk is earned by necessity and verified dependency, not by centrality, naming, file size, visual prominence, or founder preference. A module may be central but non-constitutional; a small invariant may be foundational but not executable. Both dimensions will be mapped separately.
+
+
+# Phase 2 — First relationship and boundary traces
+
+**Inspected against the same master tree SHA** `6ae0f0d6d1c4d113e2bee0a1486d1a47e48c9218`. This is source inspection, not runtime execution.
+
+## 1. Actual browser entry path
+
+```text
+src/router.tsx
+  -> src/routeTree.gen.ts
+     -> src/routes/__root.tsx
+        -> AuthProvider (client/provider layer)
+        -> PreviewHostBridge
+        -> Outlet
+           -> src/routes/index.tsx
+              -> useEffect()
+                 -> src/dccp/gate/desk.ts :: mountDesk()
+                    -> Three.js renderer / Earth / seed / animation
+```
+
+Important: the normal `/` route directly mounts `gate/desk.ts`. It does not import `src/dccp/main.ts` in the inspected route source. `main.ts` is a separate large Three.js composition entry and must not be presumed to be the deployed root experience merely because it is large or named main. We still need to determine whether another HTML entry, script, route, or build configuration loads it.
+
+## 2. API surface observed in route source
+
+| Route | Method | Direct handler target | Initial source-level observation |
+|---|---|---|---|
+| `/api/fuse` | GET | `unity/fuse.fuseSeat(null)` | Read-only response |
+| `/api/live` | GET | `live/proxy`, `live/sheet`, `pack/hudl` | External upstream fetch; timeout/abort |
+| `/api/loopback` | GET/POST | `origin/loopback.echoBody` | Echo, explicitly does not run payload |
+| `/api/unity-wallet` | GET/POST | `meter/unitybox` | Persistent file-backed wallet state; open/send/withdraw operations |
+| `/api/v2/compute` | POST | `pipe/connector.kernelPayload` | Forwards request to `https://dualiscapax.ai/api/v2/compute` |
+| `/v2/dclm/ingest` | POST | `origin/ingress.ingestRequest` | Returns SEE/HOLE style receipt |
+| `/v2/dclm/sandbox/execute` | POST | `origin/ingress.executeRequest` | Returns SEE/HOLE style receipt |
+| `/v2/dclm/session/purge` | POST | `origin/ingress.purgeReceipts` | Clears in-memory receipt tips |
+| `/v2/dclm/telemetry/circuit-breaker` | GET | `origin/ingress.breakerBody` | Reports measured=false |
+| `/v2/receipts` | GET | `origin/ingress.listReceipts` | Lists in-memory receipt tip |
+| `/v2/protocol` | GET | `origin/ingress.protocolBody` | Reports DECLARED_NOT_VERIFIED and verifier NOT_DEPLOYED |
+
+The route source shown for these handlers does not attach `authMiddleware` or an explicit route-level authentication check. The root component's `AuthProvider` is a client context provider, not by itself proof that API requests are authenticated. Confirm the full TanStack/Nitro middleware model and deployed routing before making an external exploitability claim.
+
+## 3. Critical wallet / till seam — source-level discrepancy
+
+Relevant chain:
+
+```text
+POST /api/unity-wallet
+  -> readBox() from .data/unity-wallet.json (fallback freshBox)
+  -> op=open | send | withdraw
+  -> fundWallet() | sendUnits() | withdrawUnits()
+  -> moveCoin('Merit')
+  -> coinSecurity()
+  -> divine()
+  -> interlock()
+  -> SEATS.map(lockstep)
+  -> static SEATS / string-match checks in law/floor.ts
+  -> mutate in-memory box
+  -> writeBox() to .data/unity-wallet.json
+```
+
+Observed facts:
+- Route code has POST operations named `open`, `withdraw`, and `send`; successful operations call `writeBox`.
+- `writeBox` creates the `.data` directory and writes JSON to disk.
+- `unitybox.ts` labels the system a test-unit wallet, caps initial offered units at 100, and sends units between syntactically valid Unity handles.
+- `moveCoin('Merit')` allows movement when `coinSecurity()` returns three rings and a seed.
+- `coinSecurity()` obtains the ring count from `divine()`; `divine()` runs `interlock()`; `interlock()` evaluates the three hard-coded `SEATS` with `lockstep()`.
+- `lockstep()` checks non-empty strings, non-identical strings, and simple keyword matches (evidence/claim/world). It does not invoke a cryptographic signer, external witness, DCLM receipt, or Trinity authorization service in the inspected code.
+- The wallet route accepts handle strings in request bodies/query parameters. The inspected route source does not call `requireUserId`, `authMiddleware`, or a session verifier.
+- The `coins.ts` prose says “Only Merit moves” and calls these test units, not dollars or eFuse. This distinction must be preserved.
+
+Test seam:
+- `unitybox.test.ts` tests the wallet's ability to fund, transfer, withdraw and serialize balances.
+- Its “broken ring” test calls `admitRings()` with a caller-supplied security object. It does not prove the production `moveCoin -> coinSecurity -> divine -> interlock` chain can be independently denied by a real Trinity receipt.
+- `coins.test.ts` asserts `moveCoin('Merit').ok === true` in the checked source fixture.
+- Neither test is included in the explicit TypeScript test-file list in `package.json`'s `npm test` script.
+
+Disposition: **confirmed source-level mismatch requiring owner review**, not a claim of live public exploitation. The root-level “till closed” statements and the code-level test-unit transfer mechanism are not semantically identical. The route's actual deployment/reachability, auth middleware outside the route file, persistence durability, and business/legal meaning remain to be independently checked. Do not silently reconcile these as “only a simulation” or “real settlement”; the code says test units and does persist transfer state.
+
+## 4. Trinity / law seam
+
+`law/floor.ts` provides:
+- Four law labels: `NO_FORCE`, `HOST_SAFE`, `CLEANUP_FIRST`, `TRUTH_OR_NOTHING`.
+- Three named seats: evidence, claim, world.
+- `lockstep()` compares shown/machine strings using basic string predicates and returns a line if they pass.
+
+`law/divine.ts` maps those three seat checks to `rings: 3` or `rings: 0`. `meter/coins.ts` then uses this result as the wallet movement gate.
+
+This is a real code dependency chain, but the present inspected implementation is a static consistency check over hard-coded strings. It is not evidence of independent evidence/claim/world sources, cryptographic identity, a separate deterministic chamber, an owner-ratified Trinity policy, or a receipt-bound authorization decision. The label “Trinity” must not be mistaken for those stronger properties.
+
+## 5. DCLM ingress / receipt seam
+
+`origin/ingress.ts`:
+- Canonicalizes JSON and hashes it with SHA-256.
+- Builds SEE/HOLE responses with `authority: 'NONE'`.
+- Uses a module-local in-memory `tips` array.
+- Labels DCCP `NOT_ATTESTED`.
+- Reports protocol status `DECLARED_NOT_VERIFIED`, verifier `NOT_DEPLOYED`, and write authority false.
+- `purgeReceipts()` clears only the module-local `tips` array.
+- `breakerBody()` explicitly returns `measured: false`.
+
+The routes expose these functions directly in the inspected route files. A generated SHA-256 receipt proves the content digest of that response body; it does not independently prove the input's truth, authorize a state transition, or certify external execution.
+
+## 6. Test coverage wiring
+
+The package script includes:
+- all `scripts/**/*.test.mjs`;
+- four named `src/lib` TypeScript tests;
+- `src/dccp/regulation.test.ts`;
+- `src/dccp/pass.test.ts`.
+
+It does not enumerate the other 282 DCCP test-named files in the inspected tree. This does not prove those tests fail; it means the normal `npm test` command as written does not select them. No `.github/workflows` directory was present in the inspected recursive tree, so CI wiring has not been established from this repository snapshot.
+
+## 7. Initial branch/trunk hypothesis — not ratified
+
+The first defensible trunk candidate is not `main.ts`, nor “Trinity” by name. The cross-cutting dependency chain visible so far is:
+
+```text
+explicit input / source
+  -> validation and normalization
+  -> evidence/provenance record
+  -> bounded claim
+  -> decision/admission
+  -> authorization (must be separately proven)
+  -> state-changing effect
+  -> durable receipt / replay / recovery
+```
+
+The inspected repository currently has partial implementations at several of these stages, but the chain is not shown to be complete or joined by one authorization receipt. In particular, wallet state changes and the SEE receipt pipeline are separate paths in the inspected code.
+
+## 8. Highest-priority follow-up
+
+1. Trace every state-changing route and every function that writes files, DB rows, browser storage, cookies, keys, or external services.
+2. Enumerate every route and prove whether middleware is attached globally, per-router, or per-route.
+3. Trace every use of `divine`, `moveCoin`, `admitSeat`, `evaluateMachineTrinity` (if present), `ReceiptPipe`, and all authorization receipt types.
+4. Inspect `routeTree.gen.ts`, Vite/Nitro generated entrypoints, and all HTML/bootstrap files to identify which DCCP entry points actually execute.
+5. Reconcile all “till closed” / “does not execute” declarations with test-unit wallet operations and any other state-changing surfaces.
+6. Build the full test-to-command-to-CI graph; add no tests or code changes until the test matrix is understood.
+7. Verify the above against deployment configuration and independent runtime reproduction before any claim of exposure or live value movement.
+
